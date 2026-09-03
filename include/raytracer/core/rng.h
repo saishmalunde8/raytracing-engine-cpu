@@ -27,6 +27,25 @@ struct RNG {
     auto r = std::sqrt(1 - z*z);
     return vec3(r*std::cos(a), r*std::sin(a), z);
     }
+
+    // A direction in the +Z hemisphere, distributed with density cos(theta)/pi.
+    // Directions near the pole come up more often than directions near the
+    // horizon, which is where a diffuse surface actually sends most of its
+    // light -- so samples get spent where they matter. Returned in basis
+    // coordinates; rotate it onto a surface with onb::transform().
+    //
+    // Exactly two draws, no rejection loop, so the stream advances predictably.
+    vec3 random_cosine_direction() {
+    auto r1 = next_double();
+    auto r2 = next_double();
+
+    auto phi = 2 * 3.1415926535897932385 * r1;
+    auto x = std::cos(phi) * std::sqrt(r2);
+    auto y = std::sin(phi) * std::sqrt(r2);
+    auto z = std::sqrt(1 - r2);
+
+    return vec3(x, y, z);
+    }
 };
 
 inline uint32_t pixel_sample_seed(int i, int j, int sample) {
