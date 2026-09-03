@@ -12,6 +12,7 @@
 #include "raytracer/core/rtweekend.h"
 #include "raytracer/core/onb.h"
 #include "raytracer/core/rng.h"
+#include "raytracer/sampling/pdf.h"
 
 #include <iomanip>
 #include <string>
@@ -114,6 +115,80 @@ int main() {
             if (dot(scattered, n) < -1e-9) correct_side = false;
         }
         check_true("transformed directions stay on the normal's side", correct_side);
+    }
+
+    // 5. A density is only correct if generate() and value() agree with each
+    //    other. Integrating a known function while sampling from the density and
+    //    dividing by that same density's reported likelihood exercises both
+    //    halves at once -- if either is wrong, the estimate misses.
+    //
+    //      integral of cos^3(theta) dw  over the hemisphere  =  pi/2
+    //
+    //    The normal here is deliberately not axis-aligned, so the basis
+    //    transform inside generate() is under test too.
+    {
+        RNG rng(555u);
+        vec3 n = unit_vector(vec3(0.3, 0.8, -0.5));
+        cosine_pdf p(n);
+
+        double sum = 0.0;
+        for (int i = 0; i < N; i++) {
+            vec3 d = p.generate(rng);
+            double c = dot(unit_vector(d), n);
+            sum += (c * c * c) / p.value(d);
+        }
+        check("cosine_pdf integrates cos^3 to pi/2", sum / N, pi / 2, 0.005);
+    }
+
+    // 6. Same idea for the uniform density, but over the whole sphere rather
+    //    than a hemisphere:
+    //
+    //      integral of cos^2(theta) dw  over the sphere  =  4*pi/3
+    {
+        RNG rng(4242u);
+        sphere_pdf p;
+        vec3 axis = unit_vector(vec3(-0.2, 0.6, 0.75));
+
+        double sum = 0.0;
+        for (int i = 0; i < N; i++) {
+            vec3 d = p.generate(rng);
+            double c = dot(unit_vector(d), axis);
+            sum += (c * c) / p.value(d);
+        }
+        check("sphere_pdf integrates cos^2 to 4pi/3", sum / N, 4 * pi / 3, 0.02);
+    }
+
+    // 7. A density must never report a negative likelihood, and must never
+    //    report zero for a direction it generated itself -- the integrator
+    //    divides by this value.
+    {
+        RNG rng(8080u);
+        cosine_pdf cp(unit_vector(vec3(0.1, -0.9, 0.4)));
+        sphere_pdf sp;
+        bool positive_for_own_samples = true, never_negative = true;
+
+        for (int i = 0; i < 100000; i++) {
+            if (cp.value(cp.generate(rng)) <= 0.0) positive_for_own_samples = false;
+            if (sp.value(sp.generate(rng)) <= 0.0) positive_for_own_samples = false;
+            if (cp.value(rng.random_unit_vector()) < 0.0) never_negative = false;
+        }
+        check_true("densities are positive for directions they generate", positive_for_own_samples);
+        check_true("densities never report a negative likelihood", never_negative);
+    }
+
+    // 8. Sampling through the virtual interface must stay reproducible -- a
+    //    density that cached state between calls would break deterministic mode
+    //    in a way no single-sample test would reveal.
+    {
+        vec3 n = unit_vector(vec3(1, 2, 3));
+        cosine_pdf p(n);
+        RNG a(31337u), b(31337u);
+
+        bool identical = true;
+        for (int i = 0; i < 10000; i++) {
+            if ((p.generate(a) - p.generate(b)).length() != 0.0) identical = false;
+        }
+        check_true("equal seeds give equal sequences through the pdf interface", identical);
     }
 
     std::cout << "----------------------------------------------------------------\n";
