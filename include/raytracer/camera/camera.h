@@ -168,23 +168,27 @@ class camera {
                 for (int i = x0; i < x1; i++) {
                     color pixel_color(0,0,0);
                     for (int sample = 0; sample < samples_per_pixel; sample++) {
-                        ray r;
                         if (deterministic) {
-                            uint32_t seed = pixel_sample_seed(i, j, sample);
-                            RNG rng(seed);
-                            r = get_ray(i, j, rng);
-                            pixel_color += ray_color(r, max_depth, world, rng);
+                            // Seeded per pixel and per sample, so the result does not
+                            // depend on tile order, scheduling, or thread count.
+                            RNG rng(pixel_sample_seed(i, j, sample));
+                            pixel_color += sample_pixel(i, j, world, rng);
                         } else {
-                            r = get_ray(i, j);
-                            pixel_color += ray_color(r, max_depth, world);
+                            pixel_color += sample_pixel(i, j, world, thread_rng());
                         }
-                        
                     }
 
                     int index = j * image_width + i;
                     framebuffer[index] = pixel_samples_scale * pixel_color;
                 }
             }
+        }
+
+        // The entire per-sample path. Both seeding strategies run through this,
+        // so there is only one implementation of a sample to keep correct.
+        color sample_pixel(int i, int j, const hittable& world, RNG& rng) const {
+            ray r = get_ray(i, j, rng);
+            return ray_color(r, max_depth, world, rng);
         }
 
         void initialize() {
@@ -224,24 +228,12 @@ class camera {
             defocus_disk_v = v * defocus_radius;
         }
     
-        ray get_ray(int i, int j) const {
-            // Construct a camera ray originating from the defocus disk and directed at a randomly
-            // sampled point around the pixel location i, j.
-    
-            auto offset = sample_square();
-            auto pixel_sample = pixel00_loc
-                              + ((i + offset.x()) * pixel_delta_u)
-                              + ((j + offset.y()) * pixel_delta_v);
-    
-            auto ray_origin = (defocus_angle <= 0) ? center : defocus_disk_sample();
-            auto ray_direction = pixel_sample - ray_origin;
-            auto ray_time = random_double();
-
-            return ray(ray_origin, ray_direction, ray_time);
-        }
-// ------------------------------------------------------------------------------------
+        // Construct a camera ray originating from the defocus disk and directed at a
+        // randomly sampled point around the pixel location i, j. The three draws
+        // below happen in a fixed order -- pixel offset, then defocus disk, then
+        // shutter time -- because that order defines the random stream a
+        // deterministic render reproduces.
         ray get_ray(int i, int j, RNG& rng) const {
-            // Deterministic version using provided RNG
 
             auto offset = sample_square(rng);
 
@@ -249,85 +241,30 @@ class camera {
                             + ((i + offset.x()) * pixel_delta_u)
                             + ((j + offset.y()) * pixel_delta_v);
 
-            point3 ray_origin;
-            if (defocus_angle <= 0) {
-                ray_origin = center;
-            } else {
-                // Deterministic defocus disk sample
-                auto r = std::sqrt(rng.next_double());
-                auto theta = 2 * pi * rng.next_double();
-                auto x = r * std::cos(theta);
-                auto y = r * std::sin(theta);
-                ray_origin = center + x * defocus_disk_u + y * defocus_disk_v;
-            }
+            auto ray_origin = (defocus_angle <= 0) ? center : defocus_disk_sample(rng);
 
             auto ray_direction = pixel_sample - ray_origin;
             auto ray_time = rng.next_double();
 
             return ray(ray_origin, ray_direction, ray_time);
         }
-// ------------------------------------------------------------------------------------
-
-        vec3 sample_square() const {
-            // Returns the vector to a random point in the [-.5,-.5]-[+.5,+.5] unit square.
-            return vec3(random_double() - 0.5, random_double() - 0.5, 0);
-        }
 
         vec3 sample_square(RNG& rng) const {
+            // Returns the vector to a random point in the [-.5,-.5]-[+.5,+.5] unit square.
             return vec3(rng.next_double() - 0.5,
                         rng.next_double() - 0.5,
                         0);
         }
 
-        point3 defocus_disk_sample() const {
-            // Returns a random point in the camera defocus disk.
-            auto p = random_in_unit_disk();
-            return center + (p[0] * defocus_disk_u) + (p[1] * defocus_disk_v);
-        }
-
-        color ray_color(const ray& r, int depth, const hittable& world) const {
-            // If we've exceeded the ray bounce limit, no more light is gathered.
-            if (depth <= 0)
-                return color(0,0,0);
-
-            hit_record rec;
-
-            if (world.hit(r, interval(0.001, infinity), rec)) {
-
-            ray scattered;
-            color attenuation;
-
-            color color_from_emission =
-                rec.mat->emitted(rec.u, rec.v, rec.p);
-
-            if (!rec.mat->scatter(r, rec, attenuation, scattered))
-                return color_from_emission;
-
-            return color_from_emission
-                + attenuation * ray_color(scattered, depth - 1, world);
-            }
-
-        // ---------- MISS (background + gradient sky) ----------
-
-            color base_bg = background;
-
-            if (!g_use_sky_gradient)
-                return base_bg;
-
-            vec3 unit_direction = unit_vector(r.direction());
-            double t = interval(0.0, 1.0).clamp(0.35 * (unit_direction.y() + 1.0));
-
-            // Evening gradient
-            color horizon = color(1.00, 0.68, 0.45);
-            color zenith  = color(0.45, 0.55, 0.75);
-
-            color sky = (1.0 - t) * horizon + t * zenith;
-
-            // Blend sky with background (adjust strength if needed)
-            double sky_strength = 1.0;
-
-            return (1.0 - sky_strength) * base_bg
-                + sky_strength * sky;
+        // Returns a random point in the camera defocus disk, sampled in polar form
+        // so it consumes exactly two draws. A rejection-sampled disk would consume a
+        // variable number and desynchronise the stream.
+        point3 defocus_disk_sample(RNG& rng) const {
+            auto r = std::sqrt(rng.next_double());
+            auto theta = 2 * pi * rng.next_double();
+            auto x = r * std::cos(theta);
+            auto y = r * std::sin(theta);
+            return center + x * defocus_disk_u + y * defocus_disk_v;
         }
 
         color ray_color(const ray& r, int depth, const hittable& world, RNG& rng) const {

@@ -5,6 +5,11 @@
 #include <cstdint>
 #include "vec3.h"
 
+// Every random decision taken while rendering draws from an RNG instance that
+// is passed down the call chain. Deterministic mode seeds one instance per
+// pixel-sample; the default mode hands out a per-thread instance. There is no
+// global sampling path, so a render cannot silently become irreproducible by
+// reaching for ambient randomness.
 struct RNG {
     std::mt19937 engine;
     std::uniform_real_distribution<double> dist;
@@ -31,6 +36,13 @@ inline uint32_t pixel_sample_seed(int i, int j, int sample) {
     seed ^= uint32_t(sample) * 26699u;
     seed += 1u;
     return seed;
+}
+
+// Sampling source for non-deterministic renders. One instance per worker
+// thread, so tiles never share a stream and never contend for one.
+inline RNG& thread_rng() {
+    thread_local RNG rng(std::random_device{}());
+    return rng;
 }
 
 #endif
