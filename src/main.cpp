@@ -420,7 +420,7 @@ void final_scene(int image_width, int samples_per_pixel, int max_depth) {
     boundary = make_shared<sphere>(point3(0,0,0), 5000, make_shared<dielectric>(1.5));
     world.add(make_shared<constant_medium>(boundary, .0001, color(1,1,1)));
 
-    auto emat = make_shared<lambertian>(make_shared<image_texture>("earthmap.jpg"));
+    auto emat = make_shared<lambertian>(make_shared<image_texture>("assets/textures/earthmap.jpg"));
     world.add(make_shared<sphere>(point3(400,200,400), 100, emat));
     auto pertext = make_shared<noise_texture>(0.2);
     world.add(make_shared<sphere>(point3(220,280,300), 80, make_shared<lambertian>(pertext)));
