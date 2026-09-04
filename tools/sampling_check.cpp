@@ -13,6 +13,10 @@
 #include "raytracer/core/onb.h"
 #include "raytracer/core/rng.h"
 #include "raytracer/sampling/pdf.h"
+#include "raytracer/materials/material.h"
+#include "raytracer/geometry/sphere.h"
+#include "raytracer/geometry/quad.h"
+#include "raytracer/geometry/hittable_list.h"
 
 #include <iomanip>
 #include <string>
@@ -189,6 +193,133 @@ int main() {
             if ((p.generate(a) - p.generate(b)).length() != 0.0) identical = false;
         }
         check_true("equal seeds give equal sequences through the pdf interface", identical);
+    }
+
+    // ---- geometric sampling -------------------------------------------------
+    //
+    // A shape's sampler is right when 1/pdf_value averaged over its own samples
+    // recovers the solid angle that shape covers from the sampling point. That
+    // couples generate and evaluate the same way the density tests above do.
+
+    auto white = make_shared<lambertian>(color(1,1,1));
+
+    // 9. A sphere covers a cone, and that cone's solid angle is exact on paper:
+    //        2*pi*(1 - sqrt(1 - r^2/d^2))
+    {
+        RNG rng(606u);
+        point3 origin(0, 0, 0);
+        sphere s(point3(0, 0, 10), 2.0, white);
+
+        double expected = 2 * pi * (1 - std::sqrt(1 - (2.0*2.0)/(10.0*10.0)));
+
+        double sum = 0.0;
+        int misses = 0;
+        for (int i = 0; i < N; i++) {
+            vec3 d = s.random(origin, rng);
+            double p = s.pdf_value(origin, d);
+            if (p > 0) sum += 1.0 / p; else misses++;
+        }
+        check("sphere sampling recovers its solid angle", sum / N, expected, 0.001);
+        check_true("sphere samples always hit the sphere", misses * 1000 < N);
+    }
+
+    // 10. A rectangle's solid angle has no tidy closed form, so it is measured a
+    //     second, completely independent way: fire uniformly distributed
+    //     directions and count how many land on the quad. The two estimates share
+    //     no code, so agreement is meaningful.
+    {
+        point3 origin(0, 0, 0);
+        quad q(point3(-1, -1, 2), vec3(2, 0, 0), vec3(0, 2, 0), white);
+
+        RNG rng_a(707u);
+        double sum = 0.0;
+        int misses = 0;
+        for (int i = 0; i < N; i++) {
+            vec3 d = q.random(origin, rng_a);
+            double p = q.pdf_value(origin, d);
+            if (p > 0) sum += 1.0 / p; else misses++;
+        }
+        double via_pdf = sum / N;
+
+        RNG rng_b(808u);
+        int hits = 0;
+        for (int i = 0; i < N; i++) {
+            hit_record rec;
+            if (q.hit(ray(origin, rng_b.random_unit_vector()), interval(0.001, infinity), rec))
+                hits++;
+        }
+        double via_brute_force = 4 * pi * double(hits) / N;
+
+        check("quad sampling matches brute-force solid angle", via_pdf, via_brute_force, 0.02);
+        check_true("quad samples always hit the quad", misses * 1000 < N);
+    }
+
+    // 11. A list's density is the average of its members'. Two spheres placed at
+    //     right angles cover disjoint cones, so the list must recover the sum of
+    //     their individual solid angles.
+    {
+        RNG rng(909u);
+        point3 origin(0, 0, 0);
+
+        hittable_list lights;
+        lights.add(make_shared<sphere>(point3(0, 0, 10), 2.0, white));
+        lights.add(make_shared<sphere>(point3(0, 10, 0), 2.0, white));
+
+        double one = 2 * pi * (1 - std::sqrt(1 - (2.0*2.0)/(10.0*10.0)));
+
+        double sum = 0.0;
+        int misses = 0;
+        for (int i = 0; i < N; i++) {
+            vec3 d = lights.random(origin, rng);
+            double p = lights.pdf_value(origin, d);
+            if (p > 0) sum += 1.0 / p; else misses++;
+        }
+        check("list sampling recovers both members' solid angle", sum / N, 2 * one, 0.002);
+        check_true("list samples always hit a member", misses * 1000 < N);
+    }
+
+    // 12. An empty light list is a normal state -- four scenes have no emitters.
+    //     It must report "cannot be sampled" rather than divide by zero or index
+    //     off the end of an empty vector.
+    {
+        RNG rng(1010u);
+        hittable_list empty;
+        bool safe = (empty.pdf_value(point3(0,0,0), vec3(0,0,1)) == 0.0);
+        vec3 d = empty.random(point3(0,0,0), rng);   // must not crash
+        check_true("empty list reports zero density and does not crash", safe && d.length() > 0);
+    }
+
+    // 13. Wrapper and acceleration types keep the base-class defaults, which is
+    //     what lets them compile untouched -- and is exactly why they must never
+    //     be used as lights. Pinning the behaviour here so the rule is visible.
+    {
+        RNG rng(1111u);
+        auto inner = make_shared<sphere>(point3(0, 0, 10), 2.0, white);
+        translate moved(inner, vec3(1, 0, 0));
+        rotate_y turned(inner, 30);
+
+        bool defaults_hold =
+            moved.pdf_value(point3(0,0,0), vec3(0,0,1)) == 0.0 &&
+            turned.pdf_value(point3(0,0,0), vec3(0,0,1)) == 0.0;
+
+        check_true("wrapped shapes report zero density (do not use as lights)", defaults_hold);
+    }
+
+    // 14. Mixing two densities must stay unbiased. A cosine density mixed with a
+    //     uniform one covers the whole sphere, so integrating cos^2 through the
+    //     mixture must still land on the full-sphere answer, 4*pi/3.
+    {
+        RNG rng(1212u);
+        vec3 n = unit_vector(vec3(0.4, -0.6, 0.7));
+        mixture_pdf mix(make_shared<cosine_pdf>(n), make_shared<sphere_pdf>());
+
+        double sum = 0.0;
+        for (int i = 0; i < N; i++) {
+            vec3 d = mix.generate(rng);
+            double c = dot(unit_vector(d), n);
+            sum += (c * c) / mix.value(d);
+        }
+        check("mixture_pdf integrates cos^2 to 4pi/3", sum / N, 4 * pi / 3, 0.02);
     }
 
     std::cout << "----------------------------------------------------------------\n";

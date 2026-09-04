@@ -4,6 +4,7 @@
 #include "raytracer/core/rtweekend.h"
 #include "raytracer/core/onb.h"
 #include "raytracer/core/rng.h"
+#include "raytracer/geometry/hittable.h"
 
 // A probability density over directions.
 //
@@ -59,6 +60,56 @@ class cosine_pdf : public pdf {
 
   private:
     onb uvw;
+};
+
+// Aims at geometry rather than at a surface's own preference: directions drawn
+// here point at the given object, which is how a shadowed surface finds a small
+// bright light instead of waiting to stumble into it.
+class hittable_pdf : public pdf {
+  public:
+    hittable_pdf(const hittable& objects, const point3& origin)
+      : objects(objects), origin(origin) {}
+
+    double value(const vec3& direction) const override {
+        return objects.pdf_value(origin, direction);
+    }
+
+    vec3 generate(RNG& rng) const override {
+        return objects.random(origin, rng);
+    }
+
+  private:
+    const hittable& objects;
+    point3 origin;
+};
+
+// Two densities, sampled half the time each.
+//
+// Neither one alone is enough. Aiming only at lights misses everything lit
+// indirectly; following only the surface's own preference rarely finds a small
+// light. Sampling from either but scoring against the average of both keeps the
+// result unbiased while getting the variance reduction of both strategies --
+// which is exactly why value() had to be callable on a direction this density
+// did not generate.
+class mixture_pdf : public pdf {
+  public:
+    mixture_pdf(shared_ptr<pdf> p0, shared_ptr<pdf> p1) {
+        p[0] = p0;
+        p[1] = p1;
+    }
+
+    double value(const vec3& direction) const override {
+        return 0.5 * p[0]->value(direction) + 0.5 * p[1]->value(direction);
+    }
+
+    vec3 generate(RNG& rng) const override {
+        if (rng.next_double() < 0.5)
+            return p[0]->generate(rng);
+        return p[1]->generate(rng);
+    }
+
+  private:
+    shared_ptr<pdf> p[2];
 };
 
 #endif
