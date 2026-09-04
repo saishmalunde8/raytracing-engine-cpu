@@ -25,7 +25,10 @@ class material {
   public:
     virtual ~material() = default;
 
-    virtual color emitted(double u, double v, const point3& p) const {
+    // The incoming ray and hit record are passed so an emitter can decide
+    // whether it is being looked at from the front or the back.
+    virtual color emitted(const ray& r_in, const hit_record& rec,
+                          double u, double v, const point3& p) const {
         return color(0,0,0);
     }
 
@@ -162,7 +165,16 @@ class diffuse_light : public material {
     diffuse_light(shared_ptr<texture> tex) : tex(tex) {}
     diffuse_light(const color& emit) : tex(make_shared<solid_color>(emit)) {}
 
-    color emitted(double u, double v, const point3& p) const override {
+    // Emits from its front face only.
+    //
+    // Light sampling aims rays at a light's front face. If the same light also
+    // emitted backwards, its energy would be counted twice -- once by an aimed
+    // ray, once by an ordinary bounce arriving from behind -- and the scene
+    // would render brighter than it should.
+    color emitted(const ray& r_in, const hit_record& rec,
+                  double u, double v, const point3& p) const override {
+        if (!rec.front_face)
+            return color(0,0,0);
         return tex->value(u, v, p);
     }
 

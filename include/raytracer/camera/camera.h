@@ -278,7 +278,7 @@ class camera {
                 scatter_record srec;
 
                 color color_from_emission =
-                    rec.mat->emitted(rec.u, rec.v, rec.p);
+                    rec.mat->emitted(r, rec, rec.u, rec.v, rec.p);
 
                 if (!rec.mat->scatter(r, rec, srec, rng))
                     return color_from_emission;
