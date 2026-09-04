@@ -275,17 +275,16 @@ class camera {
             
             if (world.hit(r, interval(0.001, infinity), rec)) {
 
-                ray scattered;
-                color attenuation;
+                scatter_record srec;
 
                 color color_from_emission =
                     rec.mat->emitted(rec.u, rec.v, rec.p);
 
-                if (!rec.mat->scatter(r, rec, attenuation, scattered, rng))
+                if (!rec.mat->scatter(r, rec, srec, rng))
                     return color_from_emission;
 
                 return color_from_emission
-                    + attenuation * ray_color(scattered, depth - 1, world, rng);
+                    + srec.attenuation * ray_color(srec.skip_pdf_ray, depth - 1, world, rng);
             }
 
             // ---------- MISS (background + gradient sky) ----------

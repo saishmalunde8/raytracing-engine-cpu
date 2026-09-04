@@ -4,6 +4,22 @@
 #include "raytracer/geometry/hittable.h"
 #include "raytracer/textures/texture.h"
 #include "raytracer/core/rng.h"
+#include "raytracer/sampling/pdf.h"
+
+// What a material reports back when a ray scatters off it.
+//
+// skip_pdf marks a scatter whose outgoing direction is not a choice but a
+// consequence -- a mirror reflection, a refraction. There is no spread of
+// possible directions to sample from, so those bypass density sampling entirely
+// and hand the integrator a finished ray. Anything with a spread instead supplies
+// a density in pdf_ptr for the integrator to sample and weight.
+class scatter_record {
+  public:
+    color attenuation;
+    shared_ptr<pdf> pdf_ptr;
+    bool skip_pdf = true;
+    ray skip_pdf_ray;
+};
 
 class material {
   public:
@@ -16,7 +32,7 @@ class material {
     // Scattering draws from the caller's RNG. Deterministic renders pass a
     // per-pixel-sample instance, everything else passes the thread's instance.
     virtual bool scatter(
-        const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, RNG& rng
+        const ray& r_in, const hit_record& rec, scatter_record& srec, RNG& rng
     ) const {
         return false;
     }
@@ -27,7 +43,7 @@ class lambertian : public material {
     lambertian(const color& albedo) : tex(make_shared<solid_color>(albedo)) {}
     lambertian(shared_ptr<texture> tex) : tex(tex) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, RNG& rng)
+    bool scatter(const ray& r_in, const hit_record& rec, scatter_record& srec, RNG& rng)
     const override {
         auto scatter_direction = rec.normal + rng.random_unit_vector();
 
@@ -35,8 +51,9 @@ class lambertian : public material {
         if (scatter_direction.near_zero())
             scatter_direction = rec.normal;
 
-        scattered = ray(rec.p, scatter_direction, r_in.time());
-        attenuation = tex->value(rec.u, rec.v, rec.p);
+        srec.attenuation = tex->value(rec.u, rec.v, rec.p);
+        srec.skip_pdf = true;
+        srec.skip_pdf_ray = ray(rec.p, scatter_direction, r_in.time());
         return true;
     }
 
@@ -48,13 +65,14 @@ class metal : public material {
   public:
     metal(const color& albedo, double fuzz) : albedo(albedo), fuzz(fuzz < 1 ? fuzz : 1) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, RNG& rng)
+    bool scatter(const ray& r_in, const hit_record& rec, scatter_record& srec, RNG& rng)
     const override {
         vec3 reflected = reflect(r_in.direction(), rec.normal);
         reflected = unit_vector(reflected) + fuzz * rng.random_unit_vector();
-        scattered = ray(rec.p, reflected, r_in.time());
-        attenuation = albedo;
-        return (dot(scattered.direction(), rec.normal) > 0);
+        srec.attenuation = albedo;
+        srec.skip_pdf = true;
+        srec.skip_pdf_ray = ray(rec.p, reflected, r_in.time());
+        return (dot(srec.skip_pdf_ray.direction(), rec.normal) > 0);
     }
 
   private:
@@ -67,7 +85,7 @@ class perlin_metal : public material {
     perlin_metal(shared_ptr<texture> noise_tex, color base_albedo = color(0.8,0.85,0.88), double min_fuzz = 0.0, double max_fuzz = 0.12)
       : noise_tex(noise_tex), base_albedo(base_albedo), min_fuzz(min_fuzz), max_fuzz(max_fuzz) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, RNG& rng)
+    bool scatter(const ray& r_in, const hit_record& rec, scatter_record& srec, RNG& rng)
     const override {
         // Sample the noise texture at the hit point
         color nval = noise_tex->value(rec.u, rec.v, rec.p);
@@ -86,9 +104,10 @@ class perlin_metal : public material {
 
         vec3 reflected = reflect(r_in.direction(), rec.normal);
         reflected = unit_vector(reflected) + fuzz * rng.random_unit_vector();
-        scattered = ray(rec.p, reflected, r_in.time());
-        attenuation = albedo;
-        return (dot(scattered.direction(), rec.normal) > 0);
+        srec.attenuation = albedo;
+        srec.skip_pdf = true;
+        srec.skip_pdf_ray = ray(rec.p, reflected, r_in.time());
+        return (dot(srec.skip_pdf_ray.direction(), rec.normal) > 0);
     }
 
   private:
@@ -102,9 +121,9 @@ class dielectric : public material {
   public:
     dielectric(double refraction_index) : refraction_index(refraction_index) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, RNG& rng)
+    bool scatter(const ray& r_in, const hit_record& rec, scatter_record& srec, RNG& rng)
     const override {
-        attenuation = color(1.0, 1.0, 1.0);
+        srec.attenuation = color(1.0, 1.0, 1.0);
         double ri = rec.front_face ? (1.0 / refraction_index) : refraction_index;
 
         vec3 unit_direction = unit_vector(r_in.direction());
@@ -120,7 +139,8 @@ class dielectric : public material {
         else
             direction = refract(unit_direction, rec.normal, ri);
 
-        scattered = ray(rec.p, direction, r_in.time());
+        srec.skip_pdf = true;
+        srec.skip_pdf_ray = ray(rec.p, direction, r_in.time());
         return true;
     }
 
@@ -155,10 +175,11 @@ class isotropic : public material {
     isotropic(const color& albedo) : tex(make_shared<solid_color>(albedo)) {}
     isotropic(shared_ptr<texture> tex) : tex(tex) {}
 
-    bool scatter(const ray& r_in, const hit_record& rec, color& attenuation, ray& scattered, RNG& rng)
+    bool scatter(const ray& r_in, const hit_record& rec, scatter_record& srec, RNG& rng)
     const override {
-        scattered = ray(rec.p, rng.random_unit_vector(), r_in.time());
-        attenuation = tex->value(rec.u, rec.v, rec.p);
+        srec.skip_pdf = true;
+        srec.skip_pdf_ray = ray(rec.p, rng.random_unit_vector(), r_in.time());
+        srec.attenuation = tex->value(rec.u, rec.v, rec.p);
         return true;
     }
 
