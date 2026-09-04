@@ -38,7 +38,10 @@ class camera {
             int y1;
         };
 
-        void render(const hittable& world) {
+        // `lights` holds the shapes worth aiming rays at. Like `world` it is
+        // read-only for the whole render, so worker threads share it without
+        // synchronisation. An empty list is valid and means "no lights to aim at".
+        void render(const hittable& world, const hittable& lights) {
             initialize();
     // ------------------------------------------------------------------------------------                  create framebuffer
             // 1. Create framebuffer (width × height pixels)
@@ -79,6 +82,7 @@ class camera {
                         tile.x0, tile.x1,
                         tile.y0, tile.y1,
                         world,
+                        lights,
                         framebuffer
                     );
                 }
@@ -163,6 +167,7 @@ class camera {
             int x0, int x1,
             int y0, int y1,
             const hittable& world,
+            const hittable& lights,
             std::vector<color>& framebuffer) {
             for (int j = y0; j < y1; j++) {
                 for (int i = x0; i < x1; i++) {
@@ -172,9 +177,9 @@ class camera {
                             // Seeded per pixel and per sample, so the result does not
                             // depend on tile order, scheduling, or thread count.
                             RNG rng(pixel_sample_seed(i, j, sample));
-                            pixel_color += sample_pixel(i, j, world, rng);
+                            pixel_color += sample_pixel(i, j, world, lights, rng);
                         } else {
-                            pixel_color += sample_pixel(i, j, world, thread_rng());
+                            pixel_color += sample_pixel(i, j, world, lights, thread_rng());
                         }
                     }
 
@@ -186,9 +191,10 @@ class camera {
 
         // The entire per-sample path. Both seeding strategies run through this,
         // so there is only one implementation of a sample to keep correct.
-        color sample_pixel(int i, int j, const hittable& world, RNG& rng) const {
+        color sample_pixel(int i, int j, const hittable& world, const hittable& lights,
+                           RNG& rng) const {
             ray r = get_ray(i, j, rng);
-            return ray_color(r, max_depth, world, rng);
+            return ray_color(r, max_depth, world, lights, rng);
         }
 
         void initialize() {
@@ -267,7 +273,8 @@ class camera {
             return center + x * defocus_disk_u + y * defocus_disk_v;
         }
 
-        color ray_color(const ray& r, int depth, const hittable& world, RNG& rng) const {
+        color ray_color(const ray& r, int depth, const hittable& world,
+                        const hittable& lights, RNG& rng) const {
             if (depth <= 0)
                 return color(0,0,0);
 
@@ -284,7 +291,8 @@ class camera {
                     return color_from_emission;
 
                 return color_from_emission
-                    + srec.attenuation * ray_color(srec.skip_pdf_ray, depth - 1, world, rng);
+                    + srec.attenuation
+                        * ray_color(srec.skip_pdf_ray, depth - 1, world, lights, rng);
             }
 
             // ---------- MISS (background + gradient sky) ----------
