@@ -326,6 +326,28 @@ class camera {
 
                 double scattering_pdf = rec.mat->scattering_pdf(r, rec, scattered);
 
+                // Two directions carry no energy and must not reach the division
+                // below.
+                //
+                // scattering_pdf <= 0 means the material does not scatter this
+                // way at all -- an aimed ray pointing at a light that sits behind
+                // the surface, most often. Its contribution is genuinely zero.
+                //
+                // A vanishing pdf_value means the sampler could not meaningfully
+                // have produced this direction, usually a hit test failing at a
+                // grazing angle. Dividing by it turns one sample into an enormous
+                // weight, and that pixel stays blown out no matter how many more
+                // samples are thrown at it.
+                //
+                // Together these are also the 0/0 case, which yields NaN. The
+                // second test is written as a negated `>` so a NaN pdf, which
+                // compares false against everything, falls through it too.
+                //
+                // Returning here also skips the recursive trace, so a ray that
+                // could not have contributed costs nothing to reject.
+                if (scattering_pdf <= 0 || !(pdf_value > 1e-8))
+                    return color_from_emission;
+
                 color sample_color = ray_color(scattered, depth - 1, world, lights, rng);
                 color color_from_scatter =
                     (srec.attenuation * scattering_pdf * sample_color) / pdf_value;
