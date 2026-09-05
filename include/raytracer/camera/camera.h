@@ -290,9 +290,29 @@ class camera {
                 if (!rec.mat->scatter(r, rec, srec, rng))
                     return color_from_emission;
 
-                return color_from_emission
-                    + srec.attenuation
-                        * ray_color(srec.skip_pdf_ray, depth - 1, world, lights, rng);
+                // Specular. The outgoing direction is determined, not chosen, so
+                // there is no density to weight against -- follow it directly.
+                if (srec.skip_pdf)
+                    return color_from_emission
+                        + srec.attenuation
+                            * ray_color(srec.skip_pdf_ray, depth - 1, world, lights, rng);
+
+                // Everything else: pick a direction from the material's density,
+                // then correct for having picked it that way. The weight is how
+                // much the material scatters this way, over how likely we were to
+                // choose it. When those match the ratio is 1 and this reduces to
+                // the old behaviour; when they differ, this is what keeps the
+                // result unbiased.
+                ray scattered = ray(rec.p, srec.pdf_ptr->generate(rng), r.time());
+                auto pdf_value = srec.pdf_ptr->value(scattered.direction());
+
+                double scattering_pdf = rec.mat->scattering_pdf(r, rec, scattered);
+
+                color sample_color = ray_color(scattered, depth - 1, world, lights, rng);
+                color color_from_scatter =
+                    (srec.attenuation * scattering_pdf * sample_color) / pdf_value;
+
+                return color_from_emission + color_from_scatter;
             }
 
             // ---------- MISS (background + gradient sky) ----------

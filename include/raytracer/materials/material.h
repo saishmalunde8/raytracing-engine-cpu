@@ -39,6 +39,18 @@ class material {
     ) const {
         return false;
     }
+
+    // How strongly this material actually scatters into `scattered`.
+    //
+    // Distinct from the density used to *pick* that direction. The integrator
+    // divides one by the other, and the two only cancel when the sampling
+    // density happens to match the material exactly. Separating them is what
+    // makes it legal to sample from somewhere else entirely -- a light, say.
+    virtual double scattering_pdf(
+        const ray& r_in, const hit_record& rec, const ray& scattered
+    ) const {
+        return 0;
+    }
 };
 
 class lambertian : public material {
@@ -46,18 +58,20 @@ class lambertian : public material {
     lambertian(const color& albedo) : tex(make_shared<solid_color>(albedo)) {}
     lambertian(shared_ptr<texture> tex) : tex(tex) {}
 
+    // Reports a density instead of a direction. The integrator does the picking,
+    // which is what lets it mix this density with one aimed at a light.
     bool scatter(const ray& r_in, const hit_record& rec, scatter_record& srec, RNG& rng)
     const override {
-        auto scatter_direction = rec.normal + rng.random_unit_vector();
-
-        // Catch degenerate scatter direction
-        if (scatter_direction.near_zero())
-            scatter_direction = rec.normal;
-
         srec.attenuation = tex->value(rec.u, rec.v, rec.p);
-        srec.skip_pdf = true;
-        srec.skip_pdf_ray = ray(rec.p, scatter_direction, r_in.time());
+        srec.pdf_ptr = make_shared<cosine_pdf>(rec.normal);
+        srec.skip_pdf = false;
         return true;
+    }
+
+    double scattering_pdf(const ray& r_in, const hit_record& rec, const ray& scattered)
+    const override {
+        auto cos_theta = dot(rec.normal, unit_vector(scattered.direction()));
+        return cos_theta < 0 ? 0 : cos_theta/pi;
     }
 
     private:
@@ -187,12 +201,19 @@ class isotropic : public material {
     isotropic(const color& albedo) : tex(make_shared<solid_color>(albedo)) {}
     isotropic(shared_ptr<texture> tex) : tex(tex) {}
 
+    // Scatters with no preferred direction, so its density is uniform over the
+    // whole sphere rather than a hemisphere around a normal.
     bool scatter(const ray& r_in, const hit_record& rec, scatter_record& srec, RNG& rng)
     const override {
-        srec.skip_pdf = true;
-        srec.skip_pdf_ray = ray(rec.p, rng.random_unit_vector(), r_in.time());
         srec.attenuation = tex->value(rec.u, rec.v, rec.p);
+        srec.pdf_ptr = make_shared<sphere_pdf>();
+        srec.skip_pdf = false;
         return true;
+    }
+
+    double scattering_pdf(const ray& r_in, const hit_record& rec, const ray& scattered)
+    const override {
+        return 1 / (4 * pi);
     }
 
   private:
