@@ -6,6 +6,8 @@
 #define CAMERA_H
 
 #include "raytracer/geometry/hittable.h"
+#include "raytracer/geometry/hittable_list.h"
+#include "raytracer/sampling/pdf.h"
 #include "raytracer/materials/material.h"
 #include "raytracer/renderer/color.h"
 #include "raytracer/core/rtweekend.h"
@@ -41,7 +43,7 @@ class camera {
         // `lights` holds the shapes worth aiming rays at. Like `world` it is
         // read-only for the whole render, so worker threads share it without
         // synchronisation. An empty list is valid and means "no lights to aim at".
-        void render(const hittable& world, const hittable& lights) {
+        void render(const hittable& world, const hittable_list& lights) {
             initialize();
     // ------------------------------------------------------------------------------------                  create framebuffer
             // 1. Create framebuffer (width × height pixels)
@@ -167,7 +169,7 @@ class camera {
             int x0, int x1,
             int y0, int y1,
             const hittable& world,
-            const hittable& lights,
+            const hittable_list& lights,
             std::vector<color>& framebuffer) {
             for (int j = y0; j < y1; j++) {
                 for (int i = x0; i < x1; i++) {
@@ -191,7 +193,7 @@ class camera {
 
         // The entire per-sample path. Both seeding strategies run through this,
         // so there is only one implementation of a sample to keep correct.
-        color sample_pixel(int i, int j, const hittable& world, const hittable& lights,
+        color sample_pixel(int i, int j, const hittable& world, const hittable_list& lights,
                            RNG& rng) const {
             ray r = get_ray(i, j, rng);
             return ray_color(r, max_depth, world, lights, rng);
@@ -274,7 +276,7 @@ class camera {
         }
 
         color ray_color(const ray& r, int depth, const hittable& world,
-                        const hittable& lights, RNG& rng) const {
+                        const hittable_list& lights, RNG& rng) const {
             if (depth <= 0)
                 return color(0,0,0);
 
@@ -297,14 +299,30 @@ class camera {
                         + srec.attenuation
                             * ray_color(srec.skip_pdf_ray, depth - 1, world, lights, rng);
 
-                // Everything else: pick a direction from the material's density,
-                // then correct for having picked it that way. The weight is how
-                // much the material scatters this way, over how likely we were to
-                // choose it. When those match the ratio is 1 and this reduces to
-                // the old behaviour; when they differ, this is what keeps the
-                // result unbiased.
-                ray scattered = ray(rec.p, srec.pdf_ptr->generate(rng), r.time());
-                auto pdf_value = srec.pdf_ptr->value(scattered.direction());
+                // Everything else: pick a direction, then correct for having
+                // picked it that way. The weight is how much the material
+                // scatters this way, over how likely we were to choose it.
+                //
+                // With lights in the scene, half of all directions are aimed
+                // straight at one rather than left to the material's own
+                // preference -- which is how a surface finds a small bright light
+                // instead of waiting to stumble into it. Both halves are scored
+                // against the average of the two densities, and that averaging is
+                // what stops the aiming from biasing the result.
+                shared_ptr<pdf> sampling_pdf;
+
+                if (lights.objects.empty()) {
+                    // Nothing to aim at. Mixing with an unsampleable list would
+                    // send half of all rays off in a fixed placeholder direction.
+                    sampling_pdf = srec.pdf_ptr;
+                } else {
+                    sampling_pdf = make_shared<mixture_pdf>(
+                        make_shared<hittable_pdf>(lights, rec.p),
+                        srec.pdf_ptr);
+                }
+
+                ray scattered = ray(rec.p, sampling_pdf->generate(rng), r.time());
+                auto pdf_value = sampling_pdf->value(scattered.direction());
 
                 double scattering_pdf = rec.mat->scattering_pdf(r, rec, scattered);
 
