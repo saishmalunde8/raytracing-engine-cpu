@@ -25,6 +25,16 @@ class camera {
         double g_sky_strength     = 1.0; // 0 = background only, 1 = full sky
         bool deterministic = false;
 
+        // Upper bound on worker threads. The renderer still never asks for more
+        // than the hardware reports, so this only ever caps that number. The
+        // default matches what the renderer has always used.
+        //
+        // Deterministic renders are unaffected by this: seeding is per pixel and
+        // per sample, so the same scene produces the same image at any thread
+        // count. Adjustable so that property can actually be checked, and so the
+        // single-threaded benchmark figure can be reproduced.
+        unsigned int max_threads = 4;
+
         double vfov     = 90;  // Vertical view angle (field of view)
         point3 lookfrom = point3(0,0,0);   // Point camera is looking from
         point3 lookat   = point3(0,0,-1);  // Point camera is looking at
@@ -93,7 +103,7 @@ class camera {
             unsigned int hw_threads = std::thread::hardware_concurrency();
             if (hw_threads == 0) hw_threads = 4;
 
-            unsigned int thread_count = std::min(hw_threads, 4u);
+            unsigned int thread_count = std::min(hw_threads, max_threads);
     // ------------------------------------------------------------------------------------                 start render clock
             auto render_start = std::chrono::high_resolution_clock::now();
     // ------------------------------------------------------------------------------------                 create threads array and run threads
