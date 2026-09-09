@@ -380,7 +380,11 @@ class camera {
 
             color sky = (1.0 - t) * horizon + t * zenith;
 
-            return sky;
+            // Blend the gradient over the flat background rather than replacing
+            // it, so g_sky_strength can dial the sky from "background only" to
+            // "full dusk" -- a night sky wants a hint of horizon glow, not the
+            // whole gradient at full strength.
+            return (1.0 - g_sky_strength) * base_bg + g_sky_strength * sky;
         }
 
 // --------------------------
