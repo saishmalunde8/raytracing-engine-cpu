@@ -10,6 +10,11 @@ backend-specific rendering pipelines.
 
 ![Dusk scene](docs/images/gallery/hero.png)
 
+> **Companion project** — a GPU implementation of this renderer is being built with
+> Vulkan compute at
+> [raytracing-engine-vulkan](https://github.com/saishmalunde8/raytracing-engine-vulkan).
+> This repository is the reference implementation: renderer changes land here first.
+
 ---
 
 ## System Overview
