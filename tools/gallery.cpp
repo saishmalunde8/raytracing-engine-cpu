@@ -42,109 +42,95 @@ static camera base_camera(int width, int spp, double aspect = 16.0/9.0) {
 
 // =============================================================== 1. HERO
 //
-// The dusk scene, reworked. Same DNA as before -- checker ground, a field of
-// spheres, a glass hero, motion blur -- with six changes aimed at making it
-// worth looking at rather than just correct:
-//
-//   the sky gradient turned on (it was written and never used)
-//   a restrained cool palette instead of random colour confetti
-//   the camera dropped to near ground level
-//   defocus opened up so the background melts to bokeh
-//   a warm key sun plus a cool fill moon, both sampled directly
-//   a thin participating medium so the air itself catches light
+// The dusk scene, unchanged from src/main.cpp. Edit freely here -- this copy is
+// for experimenting with, the one in main.cpp is the shipped renderer's.
 static void hero(int width, int spp) {
-    seed_scene_rng(1337u);
-
     hittable_list world;
     hittable_list lights;
 
-    auto checker = make_shared<checker_texture>(
-        0.32, color(0.07, 0.10, 0.15), color(0.48, 0.52, 0.58));
-    world.add(make_shared<sphere>(point3(0,-1000,0), 1000,
-                                  make_shared<lambertian>(checker)));
+    auto checker = make_shared<checker_texture>(0.32, color(0.15, 0.25, 0.35), color(0.85, 0.88, 0.92));
+    world.add(make_shared<sphere>(point3(0,-1000,0), 1000, make_shared<lambertian>(checker)));
 
-    // Warm key, low and behind the subjects so it rims their edges.
-    auto sun_mat = make_shared<diffuse_light>(color(1.0, 0.72, 0.42) * 22);
-    auto sun = make_shared<sphere>(point3(-16, 7.5, -14), 5.0, sun_mat);
+    auto difflight = make_shared<diffuse_light>(color(1.0, 0.85, 0.6)*10);
+    auto sun = make_shared<sphere>(point3(-15, 9, -15), 7, difflight);
     world.add(sun);
     lights.add(sun);
 
-    // Cool fill, large and dim, opposite the key. Lifts the shadow side just
-    // enough to reveal form. Worth sampling directly, unlike the stars.
-    auto moon_mat = make_shared<diffuse_light>(color(0.55, 0.64, 0.90) * 1.6);
-    auto moon = make_shared<sphere>(point3(16, 15, 12), 4.0, moon_mat);
-    world.add(moon);
-    lights.add(moon);
+    auto star_light = make_shared<diffuse_light>(color(1.0, 1.0, 1.0) * 2.0);
+    double star_radius = 0.08;  // VERY small
+    double star_height = 30.0;  // far away
 
-    // Stars stay out of the lights list: too small and dim to be worth aiming
-    // at, measured.
-    auto star_mat = make_shared<diffuse_light>(color(1.0, 1.0, 0.96) * 2.5);
-    for (int i = 0; i < 90; i++) {
-        double theta = random_double(0, 2*pi);
-        double phi   = random_double(0.15*pi, 0.48*pi);
+    for (int i = 0; i < 60; i++) {
+
+        double theta = random_double(0, 2 * pi);
+        double phi   = random_double(0.25 * pi, 0.5 * pi);
+        // only upper sky, not horizon
+
+        double x = star_height * sin(phi) * cos(theta);
+        double y = star_height * cos(phi);
+        double z = star_height * sin(phi) * sin(theta);
+
         world.add(make_shared<sphere>(
-            point3(34*sin(phi)*cos(theta), 34*cos(phi), 34*sin(phi)*sin(theta)),
-            0.075, star_mat));
+            point3(x, y, z),
+            star_radius,
+            star_light
+        ));
     }
 
-    // The sphere field. Cool palette with a rare warm accent, so colour reads as
-    // chosen rather than random.
     for (int a = -11; a < 11; a++) {
         for (int b = -11; b < 11; b++) {
             auto choose_mat = random_double();
             point3 center(a + 0.9*random_double(), 0.2, b + 0.9*random_double());
-            if ((center - point3(4, 0.2, 0)).length() <= 0.9) continue;
 
-            if (choose_mat < 0.78) {
-                color albedo;
-                if (random_double() < 0.87) {
-                    albedo = color(0.06 + 0.16*random_double(),
-                                   0.22 + 0.28*random_double(),
-                                   0.34 + 0.34*random_double());
+            if ((center - point3(4, 0.2, 0)).length() > 0.9) {
+                shared_ptr<material> sphere_material;
+
+                if (choose_mat < 0.8) {
+                    // diffuse
+                    auto albedo = color::random() * color::random();
+                    sphere_material = make_shared<lambertian>(albedo);
+                    auto center2 = center + vec3(0, random_double(0,.5), 0);
+                    world.add(make_shared<sphere>(center, center2, 0.2, sphere_material));
+                } else if (choose_mat < 0.95) {
+                    // metal
+                    auto albedo = color::random(0.5, 1);
+                    auto fuzz = random_double(0, 0.5);
+                    sphere_material = make_shared<metal>(albedo, fuzz);
+                    world.add(make_shared<sphere>(center, 0.2, sphere_material));
                 } else {
-                    albedo = color(0.72 + 0.28*random_double(),
-                                   0.34 + 0.18*random_double(),
-                                   0.12 + 0.10*random_double());
+                    // glass
+                    sphere_material = make_shared<dielectric>(1.5);
+                    world.add(make_shared<sphere>(center, 0.2, sphere_material));
                 }
-                auto center2 = center + vec3(0, random_double(0, 0.45), 0);
-                world.add(make_shared<sphere>(center, center2, 0.2,
-                                              make_shared<lambertian>(albedo)));
-            } else if (choose_mat < 0.94) {
-                auto albedo = color(0.62, 0.68, 0.78) * (0.8 + 0.2*random_double());
-                world.add(make_shared<sphere>(center, 0.2,
-                          make_shared<metal>(albedo, random_double(0, 0.35))));
-            } else {
-                world.add(make_shared<sphere>(center, 0.2,
-                          make_shared<dielectric>(1.5)));
             }
         }
     }
 
-    world.add(make_shared<sphere>(point3(0, 1, 0), 1.0, make_shared<dielectric>(1.5)));
-    world.add(make_shared<sphere>(point3(-4, 1, 0), 1.0,
-              make_shared<lambertian>(color(0.30, 0.36, 0.46))));
-    world.add(make_shared<sphere>(point3(4, 1, 0), 1.0,
-              make_shared<metal>(color(0.78, 0.76, 0.72), 0.02)));
+    auto material1 = make_shared<dielectric>(1.5);
+    world.add(make_shared<sphere>(point3(0, 1, 0), 1, material1));
 
-    auto scene = make_shared<hittable_list>();
-    scene->add(make_shared<bvh_node>(world));
+    auto material2 = make_shared<lambertian>(color(0.7, 0.5, 0.1));
+    world.add(make_shared<sphere>(point3(-4, 1, 0), 1.0, material2));
 
-    // Thin haze over the whole scene, so distance reads as distance and the sun
-    // gets a glow instead of a hard edge.
-    auto fog_bound = make_shared<sphere>(point3(0,0,0), 120,
-                                         make_shared<dielectric>(1.5));
-    scene->add(make_shared<constant_medium>(fog_bound, 0.00018, color(0.72, 0.78, 0.92)));
+    auto material3 = make_shared<metal>(color(0.7, 0.6, 0.5), 0.0);
+    world.add(make_shared<sphere>(point3(4, 1, 0), 1.0, material3));
+
+    world = hittable_list(make_shared<bvh_node>(world));
 
     auto cam = base_camera(width, spp);
-    cam.background         = color(0.014, 0.020, 0.042);
-    cam.g_use_sky_gradient = true;
-    cam.g_sky_strength     = 0.055;  // a hint of dusk, not full daylight
-    cam.vfov               = 28;
-    cam.lookfrom           = point3(10.5, 2.45, -2.8);
-    cam.lookat             = point3(0, 0.95, 0);
-    cam.defocus_angle      = 2.0;
-    cam.focus_dist         = 10.9;
-    cam.render(*scene, lights);
+    cam.max_depth         = 10;
+    cam.background        = color(0,0,0.01);
+    cam.g_use_sky_gradient = false;
+    cam.g_sky_strength     = 0.85;
+
+    cam.vfov     = 21;
+    cam.lookfrom = point3(13,2,-3);
+    cam.lookat   = point3(0,0,0);
+
+    cam.defocus_angle = 0.6;
+    cam.focus_dist    = 10.0;
+
+    cam.render(world, lights);
 }
 
 // ======================================================= 2-4. LIGHT SIZE STUDY
@@ -261,94 +247,6 @@ static void textures(int width, int spp) {
     cam.lookfrom = point3(0, 3.0, 26);
     cam.lookat   = point3(0, 1.2, 0);
     cam.render(world, lights);
-}
-
-// ============================================================ 7. SINGLE LAMP
-//
-// A dark room and one small bright source. Nearly unrenderable before direct
-// light sampling -- most rays never found the lamp at all.
-static void lamp(int width, int spp) {
-    hittable_list world;
-    hittable_list lights;
-
-    auto wall  = make_shared<lambertian>(color(0.42, 0.40, 0.38));
-    auto floor = make_shared<lambertian>(color(0.30, 0.27, 0.24));
-
-    world.add(make_shared<quad>(point3(-14,0,-14), vec3(28,0,0), vec3(0,0,28), floor));
-    world.add(make_shared<quad>(point3(-14,0,-14), vec3(28,0,0), vec3(0,16,0), wall));
-    world.add(make_shared<quad>(point3(-14,0,-14), vec3(0,0,28), vec3(0,16,0), wall));
-    world.add(make_shared<quad>(point3(14,0,-14),  vec3(0,0,28), vec3(0,16,0), wall));
-    world.add(make_shared<quad>(point3(-14,16,-14),vec3(28,0,0), vec3(0,0,28), wall));
-
-    auto bulb_mat = make_shared<diffuse_light>(color(1.0, 0.86, 0.66) * 120);
-    auto bulb = make_shared<sphere>(point3(-1.5, 7.0, -2.0), 0.34, bulb_mat);
-    world.add(bulb);
-    lights.add(bulb);
-
-    world.add(make_shared<sphere>(point3(2.6, 1.8, 1.0), 1.8,
-              make_shared<lambertian>(color(0.62, 0.58, 0.50))));
-    world.add(make_shared<sphere>(point3(-3.4, 1.3, 2.2), 1.3,
-              make_shared<metal>(color(0.82,0.80,0.76), 0.06)));
-    world.add(make_shared<sphere>(point3(0.2, 1.0, 4.4), 1.0,
-              make_shared<dielectric>(1.5)));
-
-    shared_ptr<hittable> plinth = box(point3(0,0,0), point3(3.0,1.0,3.0),
-              make_shared<lambertian>(color(0.34,0.32,0.30)));
-    plinth = make_shared<translate>(plinth, vec3(1.2, 0, -0.5));
-    world.add(plinth);
-
-    auto cam = base_camera(width, spp);
-    cam.vfov     = 42;
-    cam.lookfrom = point3(1.5, 5.0, 13.5);
-    cam.lookat   = point3(0.4, 2.2, 0);
-    cam.defocus_angle = 0.5;
-    cam.focus_dist    = 13.0;
-    cam.render(world, lights);
-}
-
-// =========================================================== 8. GOLDEN HOUR
-//
-// Low sun straight behind the subjects, haze in the air. Bodies fall dark, edges
-// catch light.
-static void goldenhour(int width, int spp) {
-    seed_scene_rng(88u);
-    hittable_list world;
-    hittable_list lights;
-
-    world.add(make_shared<sphere>(point3(0,-1000,0), 1000,
-              make_shared<lambertian>(color(0.26, 0.22, 0.19))));
-
-    auto sun_mat = make_shared<diffuse_light>(color(1.0, 0.60, 0.28) * 26);
-    auto sun = make_shared<sphere>(point3(0, 3.2, -34), 7.0, sun_mat);
-    world.add(sun);
-    lights.add(sun);
-
-    for (int i = 0; i < 16; i++) {
-        double x = random_double(-9, 9);
-        double z = random_double(-14, 2);
-        double r = random_double(0.5, 1.5);
-        world.add(make_shared<sphere>(point3(x, r, z), r,
-                  make_shared<lambertian>(color(0.30,0.27,0.25))));
-    }
-    world.add(make_shared<sphere>(point3(-2.2, 2.2, 1.0), 2.2,
-              make_shared<lambertian>(color(0.24,0.21,0.20))));
-    world.add(make_shared<sphere>(point3(2.8, 1.6, -1.0), 1.6,
-              make_shared<dielectric>(1.5)));
-
-    auto scene = make_shared<hittable_list>();
-    scene->add(make_shared<bvh_node>(world));
-    auto fog_bound = make_shared<sphere>(point3(0,0,0), 300,
-                                         make_shared<dielectric>(1.5));
-    scene->add(make_shared<constant_medium>(fog_bound, 0.0075, color(0.95,0.80,0.66)));
-
-    auto cam = base_camera(width, spp, 2.0);
-    cam.background         = color(0.05, 0.03, 0.04);
-    cam.g_use_sky_gradient = true;
-    cam.g_sky_strength     = 0.55;
-    cam.vfov               = 30;
-    cam.lookfrom           = point3(0.5, 2.1, 11.0);
-    cam.lookat             = point3(0, 1.5, -4);
-    cam.render(*scene, lights);
 }
 
 // ========================================================== 9. PERLIN METAL
@@ -646,8 +544,6 @@ int main(int argc, char** argv) {
     else if (scene == "light_pinhole")cornell_light(width, spp, 0.20);
     else if (scene == "materials")    materials(width, spp);
     else if (scene == "textures")     textures(width, spp);
-    else if (scene == "lamp")         lamp(width, spp);
-    else if (scene == "goldenhour")   goldenhour(width, spp);
     else if (scene == "perlinmetal")  perlinmetal(width, spp);
     else if (scene == "multilight")   multilight(width, spp);
     else if (scene == "bokeh")        bokeh(width, spp);
@@ -657,14 +553,12 @@ int main(int argc, char** argv) {
     else if (scene == "nested")       nested(width, spp);
     else {
         std::clog << "usage: gallery <scene> [width] [spp] > out.ppm\n\nscenes:\n"
-                  << "  hero           reworked dusk scene\n"
+                  << "  hero           dusk scene (same as main.cpp)\n"
                   << "  light_full     cornell box, full-size light\n"
                   << "  light_quarter  cornell box, half-edge light\n"
                   << "  light_pinhole  cornell box, near-pinhole light\n"
                   << "  materials      lambertian / metal / rough / glass / perlin_metal / isotropic\n"
                   << "  textures       checker / image / perlin / turbulence / marble / wood\n"
-                  << "  lamp           dark interior, one small source\n"
-                  << "  goldenhour     low backlight through haze\n"
                   << "  perlinmetal    noise-driven roughness study\n"
                   << "  multilight     three coloured emitters\n"
                   << "  bokeh          shallow focus, specular highlights\n"
